@@ -255,7 +255,25 @@ class AnswerPopup(tk.Toplevel):
 
     def __init__(self, parent: tk.Widget, item_id: int, link: str | None = None):
         super().__init__(parent)
-        # ...existing code...
+        self.title(f"Answer (ID {item_id})")
+        self.transient(parent.winfo_toplevel())
+        self.grab_set()
+        self.geometry("640x420")
+        self.minsize(520, 360)
+
+        self.item_id = item_id
+        self.link = link or ""
+
+        # Lazy imports to avoid hard dependency when not needed
+        self._sd = None
+        self._sf = None
+        self._np = None
+        self._in_stream = None
+        self._buffer = []
+        self._samplerate = 16000
+        self._channels = 1
+        self._dtype = "float32"
+        self._has_audio = False
 
         try:
             import sounddevice as sd  # type: ignore
@@ -280,22 +298,6 @@ class AnswerPopup(tk.Toplevel):
         ttk.Label(top, text="Speaking Timer", font=("Segoe UI", 12, "bold")).pack(side="left")
         self.timer = TimerWidget(top)
         self.timer.pack(side="right")
-
-        # Optional: input device selector (only if audio libs present)
-        if self._sd is not None:
-            devbar = ttk.Frame(self, padding=(8, 0, 8, 4))
-            devbar.pack(fill="x")
-            ttk.Label(devbar, text="Input device:").pack(side="left")
-            self._device_var = tk.StringVar()
-            self._device_cb = ttk.Combobox(devbar, textvariable=self._device_var, state="readonly", width=48)
-            self._device_cb.pack(side="left", fill="x", expand=True, padx=6)
-            ttk.Button(devbar, text="Refresh", command=self._refresh_devices).pack(side="left")
-            # Populate devices and select a default
-            self._refresh_devices()
-        else:
-            self._device_cb = None
-            self._input_devices = []
-            self._input_indices = []
 
         # Middle: status and buttons
         mid = ttk.Frame(self, padding=8)
