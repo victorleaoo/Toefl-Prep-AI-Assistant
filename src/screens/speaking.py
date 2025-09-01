@@ -306,15 +306,33 @@ class AnswerPopup(tk.Toplevel):
 
         btns = ttk.Frame(self, padding=(8, 0, 8, 8))
         btns.pack(fill="x")
-        # ...existing code creating buttons...
+        btns.grid_columnconfigure(0, weight=1)
+        btns.grid_columnconfigure(1, weight=1)
+        btns.grid_columnconfigure(2, weight=1)
+        btns.grid_columnconfigure(3, weight=1)
+        btns.grid_columnconfigure(4, weight=1)
 
-        # If no input devices, disable recording
-        if self._sd is not None and not getattr(self, "_input_indices", []):
-            self.status_var.set("No input audio devices found. Select another device or check system audio.")
-            self.record_btn.configure(state="disabled")
+        self.record_btn = ttk.Button(btns, text="Record", command=self._start_record)
+        self.stop_btn = ttk.Button(btns, text="Stop", command=self._stop_record, state="disabled")
+        self.play_btn = ttk.Button(btns, text="Play", command=self._play, state="disabled")
+        self.save_btn = ttk.Button(btns, text="Save", command=self._save, state="disabled")
+        self.transcribe_btn = ttk.Button(btns, text="Transcribe", command=self._transcribe_placeholder)
+
+        self.record_btn.grid(row=0, column=0, sticky="ew", padx=4)
+        self.stop_btn.grid(row=0, column=1, sticky="ew", padx=4)
+        self.play_btn.grid(row=0, column=2, sticky="ew", padx=4)
+        self.save_btn.grid(row=0, column=3, sticky="ew", padx=4)
+        self.transcribe_btn.grid(row=0, column=4, sticky="ew", padx=4)
 
         # Bottom: link info and Close
-        # ...existing code...
+        bottom = ttk.Frame(self, padding=8)
+        bottom.pack(fill="x")
+        if self.link:
+            ttk.Label(bottom, text=f"Link: {self.link}", wraplength=580).pack(anchor="w", pady=(0, 6))
+        ttk.Button(bottom, text="Close", command=self._on_close).pack(side="right")
+
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self.after(0, lambda: center_window(self))
 
     # ----- Recording logic -----
 
