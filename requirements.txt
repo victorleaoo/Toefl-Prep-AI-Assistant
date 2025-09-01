@@ -1,0 +1,9 @@
+# Runtime dependencies (Tkinter is in the Python standard library)
+# If you plan to build an .exe, install PyInstaller separately:
+#   pip install pyinstaller
+
+# Audio recording/playback + wav writing for Speaking section
+sounddevice>=0.4.6
+scipy>=1.10
+numpy>=1.24
+soundfile
