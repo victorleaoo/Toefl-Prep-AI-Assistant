@@ -277,6 +277,15 @@ class AnswerPopup(tk.Toplevel):
         self._input_devices = []
         self._input_indices = []
         self._device_cb = None
+        
+        # Audio timing variables
+        self._recording_start_time = 0
+        self._audio_duration = 0
+        self._playback_start_time = 0
+        self._is_playing = False
+        self._playback_position = 0
+        self._seeking = False
+        self._playback_timer_id = None
 
         try:
             import sounddevice as sd  # type: ignore
@@ -314,13 +323,37 @@ class AnswerPopup(tk.Toplevel):
             # Populate devices and select a default
             self._refresh_devices()
 
-        # Middle: status and buttons
+        # Middle: status, time info, and audio progress bar
         mid = ttk.Frame(self, padding=8)
         mid.pack(fill="x")
+        
+        # Status label
         self.status_var = tk.StringVar(value="Idle. Click 'Record' to start.")
         self.status_label = ttk.Label(mid, textvariable=self.status_var)
         self.status_label.pack(anchor="w")
+        
+        # Audio time display
+        time_frame = ttk.Frame(mid, padding=(0, 4))
+        time_frame.pack(fill="x")
+        
+        self.time_var = tk.StringVar(value="00:00 / 00:00")
+        ttk.Label(time_frame, textvariable=self.time_var).pack(side="left")
+        
+        # Playback slider
+        slider_frame = ttk.Frame(mid)
+        slider_frame.pack(fill="x", pady=(2, 8))
+        
+        self.playback_slider = ttk.Scale(
+            slider_frame, 
+            from_=0, 
+            to=100, 
+            orient="horizontal",
+            command=self._on_slider_move
+        )
+        self.playback_slider.pack(fill="x")
+        self.playback_slider.state(["disabled"])
 
+        # Buttons
         btns = ttk.Frame(self, padding=(8, 0, 8, 8))
         btns.pack(fill="x")
         btns.grid_columnconfigure(0, weight=1)
@@ -397,6 +430,10 @@ class AnswerPopup(tk.Toplevel):
 
         self._buffer.clear()
         self._has_audio = False
+        
+        # Reset timing info
+        self._recording_start_time = time.time()
+        self._update_timer()  # Start updating the timer
 
         def callback(indata, frames, time_info, status):
             if status:
@@ -427,6 +464,51 @@ class AnswerPopup(tk.Toplevel):
         except Exception as e:
             messagebox.showerror("Audio", f"Failed to start recording:\n{e}")
 
+    def _update_timer(self):
+        """Update the timer display during recording or playback"""
+        if self._in_stream is not None:  # Recording in progress
+            elapsed = time.time() - self._recording_start_time
+            self.time_var.set(f"{self._format_time(elapsed)} / Recording...")
+            self.after(100, self._update_timer)
+        elif self._is_playing:  # Playback in progress
+            elapsed = time.time() - self._playback_start_time + self._playback_position
+            if elapsed < self._audio_duration:
+                self.time_var.set(f"{self._format_time(elapsed)} / {self._format_time(self._audio_duration)}")
+                if not self._seeking:
+                    # Update slider position only if not currently seeking
+                    self.playback_slider.set((elapsed / self._audio_duration) * 100)
+                self.after(100, self._update_timer)
+            else:
+                # Playback finished
+                self._is_playing = False
+                self.time_var.set(f"{self._format_time(self._audio_duration)} / {self._format_time(self._audio_duration)}")
+                self.playback_slider.set(100)
+                self.play_btn.configure(text="Play")
+    
+    def _format_time(self, seconds):
+        """Format time in seconds to MM:SS format"""
+        mins = int(seconds) // 60
+        secs = int(seconds) % 60
+        return f"{mins:02d}:{secs:02d}"
+
+    def _on_slider_move(self, value):
+        """Handle slider movement for seeking in audio playback"""
+        if not self._has_audio:
+            return
+            
+        self._seeking = True
+        pos_pct = float(value) / 100
+        pos_time = pos_pct * self._audio_duration
+        self._playback_position = pos_time
+        self.time_var.set(f"{self._format_time(pos_time)} / {self._format_time(self._audio_duration)}")
+        
+        # If we're playing, adjust the playback position
+        if self._is_playing:
+            self._stop_playback()
+            self._start_playback_at_position(pos_time)
+        
+        self._seeking = False
+
     def _stop_record(self):
         if self._in_stream is None:
             return
@@ -436,24 +518,89 @@ class AnswerPopup(tk.Toplevel):
         finally:
             self._in_stream = None
 
+        # Calculate recording duration
+        self._audio_duration = time.time() - self._recording_start_time
+
         if self._buffer and self._np is not None:
             data = self._np.concatenate(self._buffer, axis=0)
             self._buffer.clear()
             self._audio_data = data  # keep in memory only
             self._has_audio = True
-            self.status_var.set("Recorded. You can Play or Save.")
+            
+            duration_str = self._format_time(self._audio_duration)
+            self.status_var.set(f"Recorded {duration_str}. You can Play or Save.")
+            self.time_var.set(f"00:00 / {duration_str}")
+            
+            # Enable playback controls
             self.play_btn.configure(state="normal")
             self.save_btn.configure(state="normal")
             self.record_btn.configure(state="normal")
             self.stop_btn.configure(state="disabled")
+            self.playback_slider.state(["!disabled"])  # Enable slider
+            self.playback_slider.set(0)  # Reset slider position
 
     def _play(self):
-        if not self._audio_supported() or not getattr(self, "_audio_data", None) is not None:
+        if not self._audio_supported() or not self._has_audio:
             return
+        
+        if self._is_playing:
+            # If already playing, stop playback
+            self._stop_playback()
+            self.play_btn.configure(text="Play")
+        else:
+            # Start playback from current position
+            self._start_playback_at_position(self._playback_position)
+            self.play_btn.configure(text="Pause")
+
+    def _start_playback_at_position(self, position_seconds):
+        """Start playback from the specified position in seconds"""
         try:
-            self._sd.play(self._audio_data, self._samplerate)
+            if position_seconds >= self._audio_duration:
+                position_seconds = 0
+                
+            frame_position = int(position_seconds * self._samplerate)
+            
+            # Calculate how many frames to skip (assuming mono audio for simplicity)
+            if frame_position > 0 and frame_position < len(self._audio_data):
+                audio_to_play = self._audio_data[frame_position:]
+            else:
+                audio_to_play = self._audio_data
+                
+            self._sd.play(audio_to_play, self._samplerate)
+            self._playback_start_time = time.time()
+            self._playback_position = position_seconds
+            self._is_playing = True
+            
+            # Start updating the timer
+            self._update_timer()
+            
+            # Set callback for when playback finishes
+            self._playback_timer_id = self.after(
+                int(self._audio_duration * 1000), 
+                self._on_playback_finished
+            )
+            
         except Exception as e:
             messagebox.showerror("Audio", f"Playback failed:\n{e}")
+
+    def _stop_playback(self):
+        """Stop the current playback"""
+        if self._is_playing:
+            self._sd.stop()
+            self._is_playing = False
+            
+            # Cancel the scheduled playback finished callback
+            if self._playback_timer_id is not None:
+                self.after_cancel(self._playback_timer_id)
+                self._playback_timer_id = None
+
+    def _on_playback_finished(self):
+        """Called when playback finishes naturally"""
+        self._is_playing = False
+        self._playback_position = 0
+        self.play_btn.configure(text="Play")
+        self.playback_slider.set(0)
+        self.time_var.set(f"00:00 / {self._format_time(self._audio_duration)}")
 
     def _save(self):
         if not self._audio_supported() or not getattr(self, "_audio_data", None) is not None:
@@ -478,12 +625,22 @@ class AnswerPopup(tk.Toplevel):
         messagebox.showinfo("Transcribe", "Transcription will be implemented later.")
 
     def _on_close(self):
+        # Stop any ongoing operations
         if self._in_stream is not None:
             try:
                 self._in_stream.abort()
                 self._in_stream.close()
             except Exception:
                 pass
+        
+        # Stop any ongoing playback
+        if self._is_playing:
+            self._stop_playback()
+            
+        # Cancel any pending timers
+        if self._playback_timer_id is not None:
+            self.after_cancel(self._playback_timer_id)
+            
         # If audio exists and not saved, ask confirmation
         if getattr(self, "_audio_data", None) is not None and self._has_audio:
             if not messagebox.askyesno("Discard Recording", "You have an unsaved recording. Close and discard it?"):
