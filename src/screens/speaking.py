@@ -274,6 +274,9 @@ class AnswerPopup(tk.Toplevel):
         self._channels = 1
         self._dtype = "float32"
         self._has_audio = False
+        self._input_devices = []
+        self._input_indices = []
+        self._device_cb = None
 
         try:
             import sounddevice as sd  # type: ignore
@@ -298,6 +301,18 @@ class AnswerPopup(tk.Toplevel):
         ttk.Label(top, text="Speaking Timer", font=("Segoe UI", 12, "bold")).pack(side="left")
         self.timer = TimerWidget(top)
         self.timer.pack(side="right")
+
+        # Optional: input device selector (only if audio libs present)
+        if self._sd is not None:
+            devbar = ttk.Frame(self, padding=(8, 0, 8, 4))
+            devbar.pack(fill="x")
+            ttk.Label(devbar, text="Input device:").pack(side="left")
+            self._device_var = tk.StringVar()
+            self._device_cb = ttk.Combobox(devbar, textvariable=self._device_var, state="readonly", width=48)
+            self._device_cb.pack(side="left", fill="x", expand=True, padx=6)
+            ttk.Button(devbar, text="Refresh", command=self._refresh_devices).pack(side="left")
+            # Populate devices and select a default
+            self._refresh_devices()
 
         # Middle: status and buttons
         mid = ttk.Frame(self, padding=8)
@@ -411,7 +426,6 @@ class AnswerPopup(tk.Toplevel):
             self.save_btn.configure(state="disabled")
         except Exception as e:
             messagebox.showerror("Audio", f"Failed to start recording:\n{e}")
-
 
     def _stop_record(self):
         if self._in_stream is None:
